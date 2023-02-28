@@ -11,6 +11,18 @@ class bit_list:
     def __init__(self, endian_msb=True):
         self.reset()
 
+    def __len__(self):
+        return len(self._bits)
+
+    def __iter__(self):
+        return iter(self._bits)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return self._bits[key.start : key.stop : key.step]
+        elif isinstance(key, int) and key >= 0 and key < len(self._bits):
+            return self._bits[key]
+
     def push(self, bit):
         self._curr_bit["bit"] = bit
 
@@ -23,15 +35,6 @@ class bit_list:
     def reset(self):
         self._curr_bit = {"bit": -1, "start": -1, "end": -1}
         self._bits = []
-
-    def __iter__(self):
-        return iter(self._bits)
-
-    def __getitem__(self, key):
-        if isinstance(key, slice):
-            return self._bits[key.start : key.stop : key.step]
-        elif isinstance(key, int) and key >= 0 and key < len(self._bits):
-            return self._bits[key]
 
 
 # Helper class to help list channels and later reference them by name
@@ -166,7 +169,7 @@ ANNOTATIONS = annotation_list(
             "names": ["STATUS 0x{data:01x}", "ST 0x{data:01x}", "{data:01x}"],
             "row": "addr-data",
         },
-        {"id": "bit", "desc": "Bit", "names": ["{data:b}"], "row": "bits"},
+        {"id": "bit", "desc": "Bit", "names": ["BIT {data[0]}: {data[1]:b}", "{data[1]:b}"], "row": "bits"},
     ),
 )
 
@@ -191,7 +194,7 @@ class Decoder(srd.Decoder):
 
     def reset(self):
         self.bits = bit_list()
-        self.state = "wait_start_condition"
+        self.in_packet = False
 
     def start(self):
         self.out_python = self.register(srd.OUTPUT_PYTHON)
@@ -209,11 +212,11 @@ class Decoder(srd.Decoder):
     def handle_start_condition(self):
         self.bits.reset()
         self.put_annotation(self.samplenum, self.samplenum, "start")
-        self.state = "wait_data_start"
+        self.in_packet = True
 
     def handle_stop_condition(self):
         self.put_annotation(self.samplenum, self.samplenum, "stop")
-        self.state = "wait_start_condition"
+        self.in_packet = False
 
     def handle_bit(self, pins):
         clk, dio = pins
@@ -223,27 +226,37 @@ class Decoder(srd.Decoder):
         else:
             self.bits.push(dio)
 
-    def process_bits(self):
+    def process_packet(self):
+        if len(self.bits) == 52:
+            self.process_short_packet()
+        elif len(self.bits) == 84:
+            self.process_long_packet()
+        else:
+            print("invalid packet length: {}".format(len(self.bits)))
 
-        for bit in self.bits:
-            self.put_annotation(bit["start"], bit["end"], "bit", bit["bit"])
+    def process_short_packet(self):
+        for i, b in enumerate(self.bits):
+            self.put_annotation(b["start"], b["end"], "bit", [i, b["bit"]])
 
-        offset = 0
-        self.put_annotation_bits(self.bits[offset : offset + 7], "address-host")
-        offset += 7
-        self.put_annotation_bits(self.bits[offset : offset + 32], "data-host")
-        offset += 32
-        self.put_annotation_bits(self.bits[offset : offset + 2], "operation")
-        offset += 2
-        self.put_annotation_bits(self.bits[offset : offset + 1], "parity-host")
-        offset += 1
-        self.put_annotation_bits(self.bits[offset : offset + 7], "address-target")
-        offset += 7
-        self.put_annotation_bits(self.bits[offset : offset + 32], "data-target")
-        offset += 32
-        self.put_annotation_bits(self.bits[offset : offset + 2], "status")
-        offset += 2
-        self.put_annotation_bits(self.bits[offset : offset + 1], "parity-target")
+        # short format
+        self.put_annotation_bits(self.bits[0:7], "address-host")
+        self.put_annotation_bits(self.bits[7:8], "operation")
+        self.put_annotation_bits(self.bits[8:9], "parity-host")
+        self.put_annotation_bits(self.bits[14:46], "data-target")
+        self.put_annotation_bits(self.bits[46:47], "parity-target")
+
+    def process_long_packet(self):
+        for i, b in enumerate(self.bits):
+            self.put_annotation(b["start"], b["end"], "bit", [i, b["bit"]])
+
+        self.put_annotation_bits(self.bits[0 : 7], "address-host")
+        self.put_annotation_bits(self.bits[7 : 39], "data-host")
+        self.put_annotation_bits(self.bits[39 : 41], "operation")
+        self.put_annotation_bits(self.bits[41 : 42], "parity-host")
+        self.put_annotation_bits(self.bits[42 : 49], "address-target")
+        self.put_annotation_bits(self.bits[49 : 81], "data-target")
+        self.put_annotation_bits(self.bits[81 : 83], "status")
+        self.put_annotation_bits(self.bits[83 : 84], "parity-target")
 
     def put_annotation_bits(self, bits, annotation_id):
         if len(bits) == 0:
@@ -266,7 +279,7 @@ class Decoder(srd.Decoder):
 
         while True:
             # State machine.
-            if self.state == "wait_start_condition":
+            if not self.in_packet:
                 # Wait for a START condition (S): CLK = high, DIO = falling.
                 pins = self.wait({clk: "h", dio: "f"})
                 self.handle_start_condition()
@@ -277,7 +290,7 @@ class Decoder(srd.Decoder):
                 pins = self.wait([{clk: "r"}, {clk: "f"}, {clk: "h", dio: "r"}])
 
                 if self.matched == (False, False, True):
-                    self.process_bits()
+                    self.process_packet()
                     self.handle_stop_condition()
                 else:
                     self.handle_bit(pins)
