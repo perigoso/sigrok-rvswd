@@ -306,7 +306,20 @@ class Decoder(srd.Decoder):
                 pins = self.wait([{clk: "r"}, {clk: "f"}, {clk: "h", dio: "r"}])
 
                 if self.matched == (False, False, True):
-                    self.process_packet()
-                    self.handle_stop_condition()
+                    # Check if we have enough bits to process a packet, this might be a spurious STOP condition
+                    if len(self.bits) < 52:
+                        print("Got a spurious STOP condition")
+                    else:
+                        # STOP condition
+                        self.process_packet()
+                        self.handle_stop_condition()
+
                 else:
-                    self.handle_bit(pins)
+                    # Check if we already have the maximum number of bits and scrap the packet if so
+                    if len(self.bits) > 84:
+                        print("Got too many bits, discarding packet")
+                        self.bits.reset()
+                        self.in_packet = False
+                    else:
+                        # Data sampling
+                        self.handle_bit(pins)
