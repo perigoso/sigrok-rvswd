@@ -1,5 +1,6 @@
 import sigrokdecode as srd
 
+
 # Helper class to help wrangle bits
 class bit_list:
     # Bits are stored as a list of dicts, each dict containing the following
@@ -170,6 +171,18 @@ ANNOTATIONS = annotation_list(
             "row": "addr-data",
         },
         {"id": "bit", "desc": "Bit", "names": ["BIT {data[0]}: {data[1]:b}", "{data[1]:b}"], "row": "bits"},
+        {
+            "id": "padding-host",
+            "desc": "Host padding",
+            "names": ["PADDING HOST 0x{data:01x}", "PAD 0x{data:01x}", "{data:01x}"],
+            "row": "addr-data",
+        },
+        {
+            "id": "padding-target",
+            "desc": "Target padding",
+            "names": ["PADDING TARGET 0x{data:01x}", "PAD 0x{data:01x}", "{data:01x}"],
+            "row": "addr-data",
+        },
     ),
 )
 
@@ -241,22 +254,25 @@ class Decoder(srd.Decoder):
         # short format
         self.put_annotation_bits(self.bits[0:7], "address-host")
         self.put_annotation_bits(self.bits[7:8], "operation")
-        self.put_annotation_bits(self.bits[8:9], "parity-host")
+        self.put_annotation_bits(self.bits[8:10], "parity-host")
+        self.put_annotation_bits(self.bits[10:14], "padding-host")
         self.put_annotation_bits(self.bits[14:46], "data-target")
-        self.put_annotation_bits(self.bits[46:47], "parity-target")
+        self.put_annotation_bits(self.bits[46:48], "parity-target")
+        self.put_annotation_bits(self.bits[48:50], "status")
+        self.put_annotation_bits(self.bits[50:52], "padding-target")
 
     def process_long_packet(self):
         for i, b in enumerate(self.bits):
             self.put_annotation(b["start"], b["end"], "bit", [i, b["bit"]])
 
-        self.put_annotation_bits(self.bits[0 : 7], "address-host")
-        self.put_annotation_bits(self.bits[7 : 39], "data-host")
-        self.put_annotation_bits(self.bits[39 : 41], "operation")
-        self.put_annotation_bits(self.bits[41 : 42], "parity-host")
-        self.put_annotation_bits(self.bits[42 : 49], "address-target")
-        self.put_annotation_bits(self.bits[49 : 81], "data-target")
-        self.put_annotation_bits(self.bits[81 : 83], "status")
-        self.put_annotation_bits(self.bits[83 : 84], "parity-target")
+        self.put_annotation_bits(self.bits[0:7], "address-host")
+        self.put_annotation_bits(self.bits[7:39], "data-host")
+        self.put_annotation_bits(self.bits[39:41], "operation")
+        self.put_annotation_bits(self.bits[41:42], "parity-host")
+        self.put_annotation_bits(self.bits[42:49], "address-target")
+        self.put_annotation_bits(self.bits[49:81], "data-target")
+        self.put_annotation_bits(self.bits[81:83], "status")
+        self.put_annotation_bits(self.bits[83:84], "parity-target")
 
     def put_annotation_bits(self, bits, annotation_id):
         if len(bits) == 0:
